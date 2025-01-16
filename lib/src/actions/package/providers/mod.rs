@@ -9,8 +9,12 @@ mod homebrew;
 use self::homebrew::Homebrew;
 mod macports;
 use self::macports::Macports;
+mod paru;
+use self::paru::Paru;
 mod pkgin;
 use self::pkgin::Pkgin;
+mod snapcraft;
+use self::snapcraft::Snapcraft;
 mod yay;
 use self::yay::Yay;
 mod winget;
@@ -20,6 +24,7 @@ use self::xbps::Xbps;
 mod zypper;
 use self::zypper::Zypper;
 use super::{repository::PackageRepository, PackageVariant};
+use crate::contexts::Contexts;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -43,8 +48,14 @@ pub enum PackageProviders {
     #[serde(rename = "pkgin")]
     Pkgin,
 
+    #[serde(rename = "snapcraft", alias = "snap")]
+    Snapcraft,
+
     #[serde(rename = "yay", alias = "pacman")]
     Yay,
+
+    #[serde(rename = "paru")]
+    Paru,
 
     #[serde(rename = "winget")]
     Winget,
@@ -66,9 +77,11 @@ impl PackageProviders {
             PackageProviders::Macports => Box::new(Macports {}),
             PackageProviders::Pkgin => Box::new(Pkgin {}),
             PackageProviders::Yay => Box::new(Yay {}),
+            PackageProviders::Paru => Box::new(Paru {}),
             PackageProviders::Winget => Box::new(Winget {}),
             PackageProviders::Xbps => Box::new(Xbps {}),
             PackageProviders::Zypper => Box::new(Zypper {}),
+            PackageProviders::Snapcraft => Box::new(Snapcraft {}),
         }
     }
 }
@@ -81,6 +94,7 @@ impl Default for PackageProviders {
             // Arch Variants
             os_info::Type::Arch=> PackageProviders::Yay,
             os_info::Type::Manjaro=> PackageProviders::Yay,
+            os_info::Type::EndeavourOS => PackageProviders::Yay,
             // BSD operating systems
             os_info::Type::DragonFly=> PackageProviders::BsdPkg,
             os_info::Type::FreeBSD=> PackageProviders::BsdPkg,
@@ -113,9 +127,13 @@ impl Default for PackageProviders {
 pub trait PackageProvider {
     fn name(&self) -> &str;
     fn available(&self) -> bool;
-    fn bootstrap(&self) -> Vec<Step>;
+    fn bootstrap(&self, contexts: &Contexts) -> Vec<Step>;
     fn has_repository(&self, package: &PackageRepository) -> bool;
-    fn add_repository(&self, package: &PackageRepository) -> anyhow::Result<Vec<Step>>;
+    fn add_repository(
+        &self,
+        package: &PackageRepository,
+        contexts: &Contexts,
+    ) -> anyhow::Result<Vec<Step>>;
     fn query(&self, package: &PackageVariant) -> anyhow::Result<Vec<String>>;
-    fn install(&self, package: &PackageVariant) -> anyhow::Result<Vec<Step>>;
+    fn install(&self, package: &PackageVariant, contexts: &Contexts) -> anyhow::Result<Vec<Step>>;
 }

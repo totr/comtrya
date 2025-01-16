@@ -1,31 +1,42 @@
 use super::ComtryaCommand;
 use crate::Runtime;
+use clap::Parser;
+use comfy_table::{Cell, ContentArrangement, Table};
 use comtrya_lib::contexts::to_rhai;
 use comtrya_lib::manifests::{load, Manifest};
 use core::panic;
 use petgraph::{visit::DfsPostOrder, Graph};
 use rhai::Engine;
+use std::path::PathBuf;
 use std::{collections::HashMap, ops::Deref};
-use structopt::StructOpt;
 use tracing::{debug, error, info, instrument, span, trace, warn};
 
-#[derive(Clone, Debug, StructOpt)]
+#[derive(Parser, Debug)]
 pub(crate) struct Apply {
-    /// Run a subset of your manifests, comma separated list
-    #[structopt(short = "m", long, use_delimiter = true)]
+    /// Run a subset of your manifests, comma separated list.
+    /// This should be a list of manifest names. No paths.
+    #[arg(short, long, value_delimiter = ',')]
     manifests: Vec<String>,
 
     /// Performs a dry-run without changing the system
-    #[structopt(long)]
+    #[arg(long)]
     dry_run: bool,
 
-    #[structopt(short = "l", long = "label")]
+    /// Define label selector
+    #[arg(short, long)]
     pub label: Option<String>,
 }
 
-impl ComtryaCommand for Apply {
-    #[instrument(skip(self, runtime))]
-    fn execute(&self, runtime: &Runtime) -> anyhow::Result<()> {
+impl Apply {
+    fn manifest_path(&self, runtime: &Runtime) -> anyhow::Result<PathBuf> {
+        for manifest in &self.manifests {
+            if manifest.contains(std::path::MAIN_SEPARATOR) {
+                return Err(anyhow::anyhow!(
+                    "Found a path, expected only names in the manifests list!"
+                ));
+            }
+        }
+
         let first_manifest_path = runtime.config.manifest_paths.first().ok_or_else(|| {
             anyhow::anyhow!(
                 "No manifest paths found in config file, please add at least one path to your manifests"
@@ -43,9 +54,40 @@ impl ComtryaCommand for Apply {
         };
 
         trace!(manifests = self.manifests.join(",").deref(),);
+        Ok(manifest_path)
+    }
 
+    #[instrument(skip(self, runtime))]
+    pub fn status(&self, runtime: &Runtime) -> anyhow::Result<()> {
         let contexts = &runtime.contexts;
+        let manifest_path = self.manifest_path(&runtime)?;
 
+        println!("Load manifests from path: {:#?}", manifest_path);
+
+        let manifests = load(manifest_path, contexts);
+
+        let mut table = Table::new();
+        table
+            .set_content_arrangement(ContentArrangement::Dynamic)
+            .set_width(40)
+            .set_header(vec!["Manifest", "Count of Actions"]);
+
+        for (name, manifest) in manifests.iter() {
+            table.add_row(vec![
+                Cell::new(format!("{name}")),
+                Cell::new(format!("{}", manifest.actions.len())),
+            ]);
+        }
+        println!("{table}");
+        Ok(())
+    }
+}
+
+impl ComtryaCommand for Apply {
+    #[instrument(skip(self, runtime))]
+    fn execute(&self, runtime: &Runtime) -> anyhow::Result<()> {
+        let contexts = &runtime.contexts;
+        let manifest_path = self.manifest_path(&runtime)?;
         let manifests = load(manifest_path, contexts);
 
         // Build DAG
@@ -77,7 +119,7 @@ impl ComtryaCommand for Apply {
 
         for (name, manifest) in manifests.iter() {
             manifest.depends.iter().for_each(|dependency| {
-                let (local_dependency_prefix, _) = name.rsplit_once('.').unwrap_or(("", ""));
+                let (local_dependency_prefix, _) = name.rsplit_once('.').unwrap_or((name, ""));
 
                 let resolved_dependency_name =
                     dependency.replace("./", format!("{}.", local_dependency_prefix).as_str());
@@ -250,6 +292,7 @@ impl ComtryaCommand for Apply {
                             break;
                         }
                     }
+                    info!("{}", action.summarize());
                     span_action.exit();
                 }
 

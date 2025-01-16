@@ -7,7 +7,7 @@ actions:
 
   - action: command.run
     command: whoami
-    sudo: true
+    privileged: true
 
   - action: command.run
     command: ls
@@ -20,4 +20,17 @@ actions:
       - "-c"
       - "curl -sfL https://get.k3s.io | sh -"
     dir: .
-    sudo: true
+    privileged: true
+
+  # we should see the gobin set in the go env output now
+  - action: command.run
+    command: go
+    args:
+      - env
+    env:
+      GOBIN: /Users/test
+
+  - action: command.run
+    command: go
+    args:
+      - env

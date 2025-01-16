@@ -12,6 +12,10 @@ pub struct DirectoryCreate {
 }
 
 impl Action for DirectoryCreate {
+    fn summarize(&self) -> String {
+        format!("Creating directory {}", self.path)
+    }
+
     fn plan(&self, _: &Manifest, _context: &Contexts) -> anyhow::Result<Vec<Step>> {
         Ok(vec![Step {
             atom: Box::new(DirectoryCreateAtom {
@@ -41,7 +45,7 @@ mod tests {
     #[test]
     fn it_can_be_deserialized() {
         let example_yaml = std::fs::File::open(get_manifest_dir().join("create.yaml")).unwrap();
-        let mut manifest: Manifest = serde_yaml::from_reader(example_yaml).unwrap();
+        let mut manifest: Manifest = serde_yml::from_reader(example_yaml).unwrap();
 
         match manifest.actions.pop() {
             Some(Actions::DirectoryCreate(action)) => {

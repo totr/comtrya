@@ -14,10 +14,13 @@ use crate::steps::Step;
 use anyhow::anyhow;
 use binary::BinaryGitHub;
 use command::run::RunCommand;
-use directory::{DirectoryCopy, DirectoryCreate};
+use directory::{DirectoryCopy, DirectoryCreate, DirectoryRemove};
+use file::chown::FileChown;
 use file::copy::FileCopy;
 use file::download::FileDownload;
 use file::link::FileLink;
+use file::remove::FileRemove;
+use file::unarchive::FileUnarchive;
 use git::GitClone;
 use group::add::GroupAdd;
 use macos::MacOSDefault;
@@ -26,12 +29,13 @@ use rhai::Engine;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
-use tracing::error;
+use tracing::{error, warn};
 use user::add::UserAdd;
 
 use self::user::add_group::UserAddGroup;
 
 #[derive(JsonSchema, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ConditionalVariantAction<T> {
     #[serde(flatten)]
     pub action: T,
@@ -56,6 +60,10 @@ impl<T> Action for ConditionalVariantAction<T>
 where
     T: Action,
 {
+    fn summarize(&self) -> String {
+        self.action.summarize()
+    }
+
     fn plan(&self, manifest: &Manifest, context: &Contexts) -> Result<Vec<Step>, anyhow::Error> {
         let engine = Engine::new();
         let mut scope = crate::contexts::to_rhai(context);
@@ -67,7 +75,6 @@ where
 
             // .unwrap() is safe here because we checked for None above
             let condition = variant.condition.clone().unwrap();
-
             match engine.eval_with_scope::<bool>(&mut scope, condition.as_str()) {
                 Ok(b) => b,
                 Err(error) => {
@@ -97,7 +104,7 @@ where
 }
 
 #[derive(JsonSchema, Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "action")]
+#[serde(deny_unknown_fields, tag = "action")]
 pub enum Actions {
     #[serde(rename = "command.run", alias = "cmd.run")]
     CommandRun(ConditionalVariantAction<RunCommand>),
@@ -111,11 +118,23 @@ pub enum Actions {
     #[serde(rename = "file.copy")]
     FileCopy(ConditionalVariantAction<FileCopy>),
 
+    #[serde(rename = "file.chown")]
+    FileChown(ConditionalVariantAction<FileChown>),
+
     #[serde(rename = "file.download")]
     FileDownload(ConditionalVariantAction<FileDownload>),
 
     #[serde(rename = "file.link")]
     FileLink(ConditionalVariantAction<FileLink>),
+
+    #[serde(rename = "file.remove")]
+    FileRemove(ConditionalVariantAction<FileRemove>),
+
+    #[serde(rename = "file.unarchive")]
+    FileUnarchive(ConditionalVariantAction<FileUnarchive>),
+
+    #[serde(rename = "directory.remove", alias = "dir.remove")]
+    DirectoryRemove(ConditionalVariantAction<DirectoryRemove>),
 
     #[serde(
         rename = "binary.github",
@@ -155,8 +174,10 @@ impl Actions {
             Actions::DirectoryCopy(a) => a,
             Actions::DirectoryCreate(a) => a,
             Actions::FileCopy(a) => a,
+            Actions::FileChown(a) => a,
             Actions::FileDownload(a) => a,
             Actions::FileLink(a) => a,
+            Actions::FileUnarchive(a) => a,
             Actions::GitClone(a) => a,
             Actions::GroupAdd(a) => a,
             Actions::MacOSDefault(a) => a,
@@ -164,6 +185,8 @@ impl Actions {
             Actions::PackageRepository(a) => a,
             Actions::UserAdd(a) => a,
             Actions::UserAddGroup(a) => a,
+            Actions::FileRemove(a) => a,
+            Actions::DirectoryRemove(a) => a,
         }
     }
 }
@@ -175,8 +198,12 @@ impl Display for Actions {
             Actions::DirectoryCopy(_) => "directory.copy",
             Actions::DirectoryCreate(_) => "directory.create",
             Actions::FileCopy(_) => "file.copy",
+            Actions::FileChown(_) => "file.chown",
             Actions::FileDownload(_) => "file.download",
             Actions::FileLink(_) => "file.link",
+            Actions::FileRemove(_) => "file.remove",
+            Actions::FileUnarchive(_) => "file.unarchive",
+            Actions::DirectoryRemove(_) => "directory.remove",
             Actions::BinaryGitHub(_) => "github.binary",
             Actions::GitClone(_) => "git.clone",
             Actions::GroupAdd(_) => "group.add",
@@ -212,6 +239,10 @@ impl<E: std::error::Error> From<E> for ActionError {
 }
 
 pub trait Action {
+    fn summarize(&self) -> String {
+        warn!("need to define action summarize");
+        "not found action summarize".to_string()
+    }
     fn plan(&self, manifest: &Manifest, context: &Contexts) -> anyhow::Result<Vec<Step>>;
 }
 
@@ -232,7 +263,7 @@ actions:
     - where: Debian
       command: halt
 "#;
-        let m: Manifest = serde_yaml::from_str(content).unwrap();
+        let m: Manifest = serde_yml::from_str(content).unwrap();
 
         let action = &m.actions[0];
 
@@ -246,12 +277,13 @@ actions:
             RunCommand {
                 command: "echo".into(),
                 args: vec!["hi".into()],
-                sudo: false,
+                privileged: false,
                 dir: std::env::current_dir()
                     .unwrap()
                     .into_os_string()
                     .into_string()
-                    .unwrap()
+                    .unwrap(),
+                ..Default::default()
             }
         );
 

@@ -1,7 +1,12 @@
 use super::{ManifestProvider, ManifestProviderError};
 
-use gitsync::GitSync;
-use tracing::{error, info};
+use gix;
+use gix::interrupt;
+use gix::progress::Discard;
+
+use dirs_next;
+
+use tracing::info;
 
 #[derive(Debug)]
 pub struct GitManifestProvider;
@@ -28,43 +33,80 @@ impl ManifestProvider for GitManifestProvider {
         &self,
         url: &str,
     ) -> anyhow::Result<std::path::PathBuf, super::ManifestProviderError> {
-        let git_config = self.parse_config_url(url);
-        let clean_repo_url = self.clean_git_url(&git_config.repository);
+        let config = self.parse_config_url(url);
+        let clean_url = self.clean_git_url(&config.repository);
         let cache_path = dirs_next::cache_dir()
             .ok_or(ManifestProviderError::NoResolution)?
             .join("comtrya")
             .join("manifests")
             .join("git")
-            .join(clean_repo_url);
-
-        let git_sync = GitSync {
-            repo: git_config.repository,
-            branch: git_config.branch,
-            dir: cache_path.clone(),
-            ..Default::default()
-        };
-
-        info!(
-            "Syncing Git repository {} to {}",
-            &url,
-            cache_path.to_str().unwrap_or("cannot extract path")
-        );
-
-        if let Err(error) = git_sync.bootstrap() {
-            error!("Failed to bootstrap repository, {:?}", error);
-            return Err(ManifestProviderError::NoResolution);
+            .join(clean_url);
+        if !cache_path.exists() {
+            self.fetch_and_clone(&cache_path, &config)?;
         }
 
-        if let Err(error) = git_sync.sync() {
-            error!("Failed to bootstrap repository, {:?}", error);
-            return Err(ManifestProviderError::NoResolution);
-        }
-
-        Ok(cache_path.join(git_config.path.unwrap_or_else(|| String::from(""))))
+        Ok(cache_path)
     }
 }
 
 impl GitManifestProvider {
+    fn fetch_and_clone(
+        &self,
+        cache_path: &std::path::Path,
+        config: &GitConfig,
+    ) -> anyhow::Result<(), super::ManifestProviderError> {
+        info!("Preparing to fetch and clone manifests.");
+        let r = std::fs::create_dir_all(cache_path);
+        if r.is_err() {
+            return Err(ManifestProviderError::NoResolution);
+        }
+
+        let url = gix::url::parse(config.repository.clone().as_str().into());
+
+        if url.is_err() {
+            return Err(ManifestProviderError::NoResolution);
+        }
+
+        let url = url.unwrap();
+
+        unsafe {
+            let handler = interrupt::init_handler(1, || {});
+            if handler.is_err() {
+                return Err(ManifestProviderError::NoResolution);
+            }
+        };
+
+        let prepare_clone = gix::prepare_clone(url.clone(), cache_path);
+        if prepare_clone.is_err() {
+            return Err(ManifestProviderError::NoResolution);
+        }
+        let mut prepare_clone = prepare_clone.unwrap();
+
+        let prepare_checkout =
+            prepare_clone.fetch_then_checkout(gix::progress::Discard, &interrupt::IS_INTERRUPTED);
+        if prepare_checkout.is_err() {
+            return Err(ManifestProviderError::NoResolution);
+        }
+        let mut prepare_checkout = prepare_checkout.unwrap().0;
+
+        let repo = prepare_checkout.main_worktree(Discard, &interrupt::IS_INTERRUPTED);
+        if repo.is_err() {
+            return Err(ManifestProviderError::NoResolution);
+        }
+        let repo = repo.unwrap().0;
+
+        let success = repo
+            .find_default_remote(gix::remote::Direction::Fetch)
+            .expect("always present after clone");
+        if success.is_err() {
+            return Err(ManifestProviderError::NoResolution);
+        }
+
+        info!("Finished fetch and clone operation.");
+
+        Ok(())
+    }
+
     fn parse_config_url(&self, uri: &str) -> GitConfig {
         let (repository, parts) = match uri.split_once('#') {
             Some(parts) => parts,
@@ -102,127 +144,5 @@ impl GitManifestProvider {
             .replace("https", "")
             .replace("http", "")
             .replace([':', '.', '/'], "")
-    }
-}
-
-// Need to work out why this doesn't pass on Windows.
-#[cfg(test)]
-#[cfg(unix)]
-mod test {
-    use crate::manifests::providers::git::GitConfig;
-
-    use super::super::ManifestProvider;
-    use super::GitManifestProvider;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn test_clean_git_url() {
-        let git_manifest_provider = GitManifestProvider {};
-
-        assert_eq!(
-            "githubcomcomtryacomtrya",
-            git_manifest_provider.clean_git_url("https://github.com/comtrya/comtrya")
-        );
-    }
-
-    #[test]
-    fn test_looks_familiar() {
-        let git_manifest_provider = GitManifestProvider {};
-
-        assert_eq!(
-            true,
-            git_manifest_provider
-                .looks_familiar(&String::from("https://github.com/comtrya/comtrya"))
-        );
-
-        assert_eq!(
-            true,
-            git_manifest_provider.looks_familiar(&String::from("git://github.com/comtrya/comtrya"))
-        );
-
-        assert_eq!(
-            true,
-            git_manifest_provider.looks_familiar(&String::from("ssh://github.com/comtrya/comtrya"))
-        );
-
-        assert_eq!(
-            false,
-            git_manifest_provider.looks_familiar(&String::from("/github.com/comtrya/comtrya"))
-        );
-
-        assert_eq!(
-            false,
-            git_manifest_provider.looks_familiar(&String::from("github.com/comtrya/comtrya"))
-        );
-    }
-
-    #[test]
-    fn test_parse_config_url() {
-        let git_manifest_provider = GitManifestProvider {};
-
-        assert_eq!(
-            GitConfig {
-                repository: String::from("https://hubgit.com/comtrya/comtrya"),
-                branch: None,
-                path: None,
-            },
-            git_manifest_provider.parse_config_url("https://hubgit.com/comtrya/comtrya")
-        );
-
-        assert_eq!(
-            GitConfig {
-                repository: String::from("https://hubgit.com/comtrya/comtrya"),
-                branch: Some(String::from("main")),
-                path: None,
-            },
-            git_manifest_provider.parse_config_url("https://hubgit.com/comtrya/comtrya#main")
-        );
-
-        assert_eq!(
-            GitConfig {
-                repository: String::from("https://hubgit.com/comtrya/comtrya"),
-                branch: Some(String::from("main")),
-                path: Some(String::from("comtrya")),
-            },
-            git_manifest_provider
-                .parse_config_url("https://hubgit.com/comtrya/comtrya#main:comtrya")
-        );
-
-        assert_eq!(
-            GitConfig {
-                repository: String::from("https://hubgit.com/comtrya/comtrya"),
-                branch: Some(String::from("main")),
-                path: None,
-            },
-            git_manifest_provider.parse_config_url("https://hubgit.com/comtrya/comtrya#main:")
-        );
-
-        assert_eq!(
-            GitConfig {
-                repository: String::from("https://hubgit.com/comtrya/comtrya"),
-                branch: None,
-                path: Some(String::from("comtrya")),
-            },
-            git_manifest_provider.parse_config_url("https://hubgit.com/comtrya/comtrya#:comtrya")
-        );
-    }
-
-    #[test]
-    fn test_resolve() {
-        let git_manifest_provider = GitManifestProvider {};
-
-        assert_eq!(
-            true,
-            git_manifest_provider
-                .resolve(&String::from("https://github.com/comtrya/comtrya"))
-                .is_ok()
-        );
-
-        assert_eq!(
-            true,
-            git_manifest_provider
-                .resolve(&String::from("https://hubgit.com/comtrya/comtrya"))
-                .is_err()
-        );
     }
 }

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 #[cfg(unix)]
 use tracing::error;
 
+#[derive(Debug)]
 pub struct Chown {
     pub path: PathBuf,
     pub owner: String,
@@ -33,6 +34,9 @@ impl std::fmt::Display for Chown {
 
 #[cfg(unix)]
 use std::os::unix::prelude::MetadataExt;
+
+#[cfg(unix)]
+use file_owner::PathExt;
 
 #[cfg(unix)]
 impl Atom for Chown {
@@ -63,10 +67,10 @@ impl Atom for Chown {
         };
 
         if let (Some(current_owner), Some(current_group)) = (
-            users::get_user_by_uid(metadata.uid()),
-            users::get_group_by_gid(metadata.gid()),
+            uzers::get_user_by_uid(metadata.uid()),
+            uzers::get_group_by_gid(metadata.gid()),
         ) {
-            let requested_owner = match users::get_user_by_name(self.owner.as_str()) {
+            let requested_owner = match uzers::get_user_by_name(self.owner.as_str()) {
                 Some(owner) => owner,
                 None => {
                     error!(
@@ -80,7 +84,7 @@ impl Atom for Chown {
                 }
             };
 
-            let requested_group = match users::get_group_by_name(self.group.as_str()) {
+            let requested_group = match uzers::get_group_by_name(self.group.as_str()) {
                 Some(group) => group,
                 None => {
                     error!(
@@ -110,6 +114,8 @@ impl Atom for Chown {
             }
         }
 
+        error!("Something happened here");
+
         Ok(Outcome {
             side_effects: vec![],
             should_run: false,
@@ -117,6 +123,14 @@ impl Atom for Chown {
     }
 
     fn execute(&mut self) -> anyhow::Result<()> {
+        if !self.owner.is_empty() {
+            self.path.set_owner(self.owner.as_str())?;
+        }
+
+        if !self.group.is_empty() {
+            self.path.set_group(self.group.as_str())?;
+        }
+
         Ok(())
     }
 }
@@ -147,12 +161,12 @@ mod tests {
         // Using unwrap_or_else which catches the CI build where the users
         // crate can't seem to detect the user within a container.
         // Which I know to be root.
-        let user = users::get_current_username()
+        let user = uzers::get_current_username()
             .unwrap_or_else(|| std::ffi::OsString::from("root"))
             .into_string()
             .unwrap();
 
-        let group = users::get_current_groupname()
+        let group = uzers::get_current_groupname()
             .unwrap_or_else(|| std::ffi::OsString::from("root"))
             .into_string()
             .unwrap();

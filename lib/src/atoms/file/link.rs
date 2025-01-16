@@ -3,7 +3,7 @@ use crate::atoms::Outcome;
 use super::super::Atom;
 use super::FileAtom;
 use std::path::PathBuf;
-use tracing::{debug, error, warn};
+use tracing::{error, warn};
 
 pub struct Link {
     pub source: PathBuf,
@@ -59,7 +59,7 @@ impl Atom for Link {
                     "Cannot plan: target already exists and isn't a link: {}",
                     self.target.display()
                 );
-                debug!("Cannot plan: {}", err);
+                error!("Cannot plan: {}", err);
 
                 return Ok(Outcome {
                     side_effects: vec![],
@@ -69,7 +69,7 @@ impl Atom for Link {
         };
 
         let source = if cfg!(target_os = "windows") {
-            const PREFIX: &str = r#"\\?\"#;
+            const PREFIX: &str = r"\\?\";
             PathBuf::from(&self.source.display().to_string().replace(PREFIX, ""))
         } else {
             self.source.to_owned()

@@ -21,6 +21,10 @@
 
 Want to learn how to use Comtrya? [Check the docs](https://comtrya.dev).
 
+Comtrya now also has documentation in the repository located in the `docs/` folder. In order to use it, please install
+[mdbook](https://github.com/rust-lang/mdBook) using `cargo install mdbook`. Navigate to the `docs/` directory and run
+`mdbook serve`. The documentation will be available through your web browser usually on `localhost:3000`.
+
 ---
 
 ## About
@@ -44,7 +48,7 @@ curl -fsSL https://get.comtrya.dev | sh
 or specify `VERSION=vx.x.x` to pin to a release version
 
 ```shell
-VERSION=v0.8.5 curl -fsSL https://get.comtrya.dev | sh
+curl -fsSL https://get.comtrya.dev | VERSION=v0.9.1 sh
 ```
 
 If this doesn't work for your OS and architecture, please open an issue and we'll do our best to support it.

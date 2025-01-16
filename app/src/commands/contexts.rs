@@ -2,20 +2,19 @@ use super::ComtryaCommand;
 use crate::Runtime;
 use colored::Colorize;
 use comfy_table::{presets::NOTHING, Attribute, Cell, ContentArrangement, Table};
-use structopt::StructOpt;
 
-#[derive(Clone, Debug, StructOpt)]
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command()]
 pub(crate) struct Contexts {
     /// Show the values of the contexts
-    #[structopt(long)]
+    #[arg(long)]
     show_values: bool,
 }
 
 impl ComtryaCommand for Contexts {
     fn execute(&self, runtime: &Runtime) -> anyhow::Result<()> {
-        println!("{}", "This command is a BETA feature. If you have any feedback: https://github.com/comtrya/comtrya/issues/304".italic().bold());
-        println!();
-
         for (name, context) in runtime.contexts.iter() {
             println!("{}", name.to_string().underline().bold());
 
@@ -52,7 +51,7 @@ impl ComtryaCommand for Contexts {
                     });
             } else {
                 for (key, value) in context.iter() {
-                    let value = strip_ansi_escapes::strip(value.to_string()).unwrap_or_default();
+                    let value = strip_ansi_escapes::strip(value.to_string());
                     let value = String::from_utf8(value).unwrap_or_default();
 
                     table.add_row(vec![

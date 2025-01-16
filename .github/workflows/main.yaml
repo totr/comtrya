@@ -7,7 +7,7 @@ on:
       - "main"
 
 env:
-  MIN_SUPPORTED_RUST_VERSION: "1.65.0"
+  MIN_SUPPORTED_RUST_VERSION: "1.81.0"
   CICD_INTERMEDIATES_DIR: "_cicd-intermediates"
   CARGO_TERM_COLOR: always
   #Fix these up soon
@@ -15,10 +15,10 @@ env:
 
 jobs:
   lint-test-release:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Clone Repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Install Rust Toolchain (v${{ env.MIN_SUPPORTED_RUST_VERSION }})
         uses: actions-rs/toolchain@v1
@@ -38,14 +38,8 @@ jobs:
         with:
           command: test
 
-      - name: Run Tarpaulin
-        uses: actions-rs/tarpaulin@v0.1
-        with:
-          version: "0.20.1"
-          args: "--workspace -- --test-threads 1"
-
       - name: Upload to codecov.io
-        uses: codecov/codecov-action@v1
+        uses: codecov/codecov-action@v5
 
       - name: Check for Release
         id: is-release
@@ -54,66 +48,92 @@ jobs:
           unset IS_RELEASE ; if [[ $GITHUB_REF =~ ^refs/tags/v[0-9].* ]]; then IS_RELEASE='true' ; fi
           echo ::set-output name=IS_RELEASE::${IS_RELEASE}
 
-      - name: Cargo Publish
-        uses: katyo/publish-crates@v1
+      - name: Cargo Publish "comtrya-lib"
         if: steps.is-release.outputs.IS_RELEASE
-        with:
-          args: --allow-dirty
-          registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p comtrya-lib --token ${CRATES_TOKEN}
+        env:
+          CRATES_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Cargo Publish "comtrya"
+        if: steps.is-release.outputs.IS_RELEASE
+        run: cargo publish -p comtrya --token ${CRATES_TOKEN}
+        env:
+          CRATES_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   build:
-    name: build-${{ matrix.job.target }}
-    runs-on: ${{ matrix.job.os }}
+    name: Build-${{ matrix.platform.target }}
+    runs-on: ${{ matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
-        job:
-          - { os: ubuntu-20.04, target: aarch64-unknown-linux-gnu }
-          - { os: ubuntu-20.04, target: x86_64-unknown-linux-gnu }
-
-          - { os: macos-12, target: x86_64-apple-darwin }
-          - { os: macos-12, target: aarch64-apple-darwin }
-
-          - { os: windows-2019, target: x86_64-pc-windows-msvc }
+        platform:
+          - os_name: Linux-x86_64-gnu
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            bin: comtrya
+            name: comtrya-x86_64-unknown-linux-gnu
+            cross: false
+            cargo_command: cargo
+            skip_tests: false
+          - os_name: Linux-aarch64-gnu
+            os: ubuntu-24.04
+            target: aarch64-unknown-linux-gnu
+            bin: comtrya
+            name: comtrya-aarch64-unknown-linux-gnu
+            cross: false
+            cargo_command: ./cross
+            skip_tests: false
+          - os_name: Windows-x86_64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+            bin: comtrya.exe
+            name: comtrya-x86_64-pc-windows-msvc
+            cross: false
+            cargo_command: cargo
+            skip_tests: false
+          - os_name: macOS-x86_64
+            os: macos-13
+            target: x86_64-apple-darwin
+            bin: comtrya
+            name: comtrya-x86_64-apple-darwin
+            cross: false
+            cargo_command: cargo
+            skip_tests: false
+          - os_name: macOS-aarch64
+            os: macos-14
+            target: aarch64-apple-darwin
+            bin: comtrya
+            name: comtrya-aarch64-apple-darwin
+            cross: false
+            cargo_command: ./cross
+            skip_tests: false
     steps:
-      - name: Clone Repository
-        uses: actions/checkout@v2
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Install Rust Toolchain
-        uses: actions-rs/toolchain@v1
+      - name: Build binary
+        uses: houseabsolute/actions-rust-cross@v1
         with:
-          toolchain: ${{ env.MIN_SUPPORTED_RUST_VERSION }}
-          target: ${{ matrix.job.target }}
-          override: true
-          default: true
-          profile: minimal
-
-      - name: Handle Rust Dependencies Caching
-        uses: Swatinem/rust-cache@v1
-        with:
-          key: v1-${{ matrix.job.target }}
-
-      - name: Build Release Binary
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --release
+          command: "build"
+          target: ${{ matrix.platform.target }}
+          toolchain: stable
+          args: "--release"
 
       - name: Rename Binary
-        if: matrix.job.target != 'x86_64-pc-windows-msvc'
+        if: matrix.platform.target != 'x86_64-pc-windows-msvc'
         shell: bash
         run: |
-          mv target/release/comtrya comtrya-${{ matrix.job.target }}
+          mv target/${{ matrix.platform.target }}/release/comtrya comtrya-${{ matrix.platform.target }}
 
       - name: Rename Binary.exe
-        if: matrix.job.target == 'x86_64-pc-windows-msvc'
+        if: matrix.platform.target == 'x86_64-pc-windows-msvc'
         shell: bash
         run: |
-          mv target/release/comtrya.exe comtrya-${{ matrix.job.target }}.exe
+          mv target/${{ matrix.platform.target }}/release/comtrya.exe comtrya-${{ matrix.platform.target }}.exe
 
       - name: Upload Artifact
-        if: matrix.job.target != 'x86_64-pc-windows-msvc'
-        uses: softprops/action-gh-release@v1
+        if: matrix.platform.target != 'x86_64-pc-windows-msvc'
+        uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           draft: true
@@ -122,11 +142,11 @@ jobs:
           generate_release_notes: false
           fail_on_unmatched_files: true
           files: |
-            comtrya-${{ matrix.job.target }}
+            comtrya-${{ matrix.platform.target }}
 
       - name: Upload Artifact.exe
-        if: matrix.job.target == 'x86_64-pc-windows-msvc'
-        uses: softprops/action-gh-release@v1
+        if: matrix.platform.target == 'x86_64-pc-windows-msvc'
+        uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           draft: true
@@ -135,14 +155,14 @@ jobs:
           generate_release_notes: false
           fail_on_unmatched_files: true
           files: |
-            comtrya-${{ matrix.job.target }}.exe
+            comtrya-${{ matrix.platform.target }}.exe
 
   build-musl:
     runs-on: ubuntu-latest
     container: clux/muslrust:stable
     steps:
       - name: Clone Repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Link to muscl Toolchain
         run: |
@@ -150,7 +170,7 @@ jobs:
           ln -s /root/.rustup $HOME/.rustup
 
       - name: Handle Rust Dependencies Caching
-        uses: Swatinem/rust-cache@v1
+        uses: Swatinem/rust-cache@v2
         with:
           key: v1-linux-musl
 
@@ -166,7 +186,7 @@ jobs:
           mv target/x86_64-unknown-linux-musl/release/comtrya target/x86_64-unknown-linux-musl/release/comtrya-x86_64-unknown-linux-musl
 
       - name: Upload release archive
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           draft: true

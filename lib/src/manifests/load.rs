@@ -23,6 +23,10 @@ pub fn load(manifest_path: PathBuf, contexts: &Contexts) -> HashMap<String, Mani
         .same_file_system(true)
         // Arbitrary for now, 9 "should" be enough?
         .max_depth(Some(9))
+        .filter_entry(|entry| {
+            !(entry.file_type().map_or(false, |ft| ft.is_dir())
+            && entry.file_name() == OsStr::new("files"))
+        })
         .build()
         // Don't walk directories
         .filter(|entry| {
@@ -41,18 +45,6 @@ pub fn load(manifest_path: PathBuf, contexts: &Contexts) -> HashMap<String, Mani
                     file_name.ends_with(".yaml")
                         || file_name.ends_with(".yml")
                         || file_name.ends_with(".toml")
-                })
-                .unwrap_or(false)
-        })
-        // Don't consider anything in a `files` directory a manifest
-        .filter(|entry| {
-            !entry
-                .as_ref()
-                .ok()
-                .and_then(|entry| {
-                    entry.path().parent().and_then(|parent| {
-                        parent.file_name().map(|file_name| file_name.eq("files"))
-                    })
                 })
                 .unwrap_or(false)
         })
@@ -87,9 +79,14 @@ pub fn load(manifest_path: PathBuf, contexts: &Contexts) -> HashMap<String, Mani
                     }
                 };
 
-                let manifest: Option<Manifest> = match entry.extension().and_then(OsStr::to_str) {
-                    Some("yaml") | Some("yml") => serde_yaml::from_str(template.deref()).ok(),
-                    Some("toml") => toml::from_str(template.deref()).ok(),
+                let manifest: anyhow::Result<Manifest> = match entry
+                    .extension()
+                    .and_then(OsStr::to_str)
+                {
+                    Some("yaml") | Some("yml") => {
+                        serde_yml::from_str::<Manifest>(template.deref()).map_err(anyhow::Error::from)
+                    }
+                    Some("toml") => toml::from_str::<Manifest>(template.deref()).map_err(anyhow::Error::from),
                     _ => {
                         error!("Unrecognized file extension for manifest");
                         span.exit();
@@ -98,17 +95,23 @@ pub fn load(manifest_path: PathBuf, contexts: &Contexts) -> HashMap<String, Mani
                     }
                 };
 
-                if let Some(mut manifest) = manifest {
-                    let name = get_manifest_name(&manifest_path, &entry)
-                        .expect("Failed to get manifest name");
+                match manifest {
+                    Ok(mut manifest) => {
+                        let name = get_manifest_name(&manifest_path, &entry)
+                            .expect("Failed to get manifest name");
 
-                    manifest.root_dir = entry.parent().map(|parent| parent.to_path_buf());
+                        manifest.root_dir = entry.parent().map(|parent| parent.to_path_buf());
 
-                    manifest.name = Some(name.clone());
+                        manifest.name = Some(name.clone());
 
-                    manifests.insert(name, manifest);
-                } else {
-                    error!("Unrecognized file extension for manifest");
+                        manifests.insert(name, manifest);
+                    }
+                    Err(err) => {
+                        let manifest_name =
+                            get_manifest_name(&manifest_path, &entry).unwrap_or_default();
+
+                        error!("Manifest '{manifest_name}' in file with path '{}' cannot be parsed. Reason: {err}", &entry.display());
+                    }
                 }
 
                 span.exit();
